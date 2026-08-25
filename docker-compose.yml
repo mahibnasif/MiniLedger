@@ -1,0 +1,31 @@
+# Local Postgres for MiniLedger.
+#
+# Pinned to 15 because the schema relies on features that are version-sensitive:
+#   - STORED generated columns (Postgres 12+)
+#   - gen_random_uuid() in core, without the pgcrypto extension (Postgres 13+)
+# Pinning avoids "works on my machine" drift between a laptop and CI.
+
+services:
+  db:
+    image: postgres:15
+    container_name: miniledger-db
+    environment:
+      POSTGRES_USER: miniledger
+      POSTGRES_PASSWORD: miniledger
+      POSTGRES_DB: miniledger
+    ports:
+      - "5432:5432"
+    volumes:
+      - miniledger_pgdata:/var/lib/postgresql/data
+      # Runs once, on first initialisation of an empty data volume.
+      - ./docker/initdb:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      # Migrations and tests must not start before the server accepts
+      # connections, otherwise the first run after `up` fails spuriously.
+      test: ["CMD-SHELL", "pg_isready -U miniledger -d miniledger"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+
+volumes:
+  miniledger_pgdata:

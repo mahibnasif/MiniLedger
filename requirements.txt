@@ -1,0 +1,17 @@
+# --- Web layer ---------------------------------------------------------------
+fastapi>=0.115
+uvicorn[standard]>=0.32
+
+# --- Database ----------------------------------------------------------------
+# psycopg 3 (not psycopg2): it is the actively developed driver and supports
+# Python 3.13. SQLAlchemy talks to it via the "postgresql+psycopg://" dialect.
+SQLAlchemy>=2.0.36
+alembic>=1.14
+psycopg[binary]>=3.2
+
+# --- Config ------------------------------------------------------------------
+pydantic>=2.9
+pydantic-settings>=2.6
+
+# --- Payments (Phase 4, test mode only) --------------------------------------
+stripe>=11.1
