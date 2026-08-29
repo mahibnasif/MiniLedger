@@ -31,13 +31,14 @@ from sqlalchemy import (
     ForeignKeyConstraint,
     Index,
     MetaData,
+    SmallInteger,
     String,
     Text,
     UniqueConstraint,
     func,
     text,
 )
-from sqlalchemy.dialects.postgresql import UUID
+from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 # --- Domain vocabulary -------------------------------------------------------
@@ -338,4 +339,82 @@ class AccountBalance(Base):
         CheckConstraint("posted_debits >= 0", name="posted_debits_non_negative"),
         CheckConstraint("posted_credits >= 0", name="posted_credits_non_negative"),
         CheckConstraint("entry_count >= 0", name="entry_count_non_negative"),
+    )
+
+
+class IdempotencyKey(Base):
+    """A client-supplied key claimed in the database, never in memory.
+
+    The whole point is to survive things an in-process cache cannot: a retry
+    that lands on a different worker, a retry that arrives while the first
+    attempt is still running, and a process that dies mid-transfer.
+
+    The claim and the transfer happen in ONE database transaction. That gives a
+    property worth stating explicitly, because the rest of the design leans on
+    it:
+
+        A committed row ALWAYS has transfer_id set.
+
+    There is no committed "in progress" state to get stuck in. If a request
+    fails or the process dies, the whole transaction rolls back and the key row
+    vanishes along with the transfer, so a retry starts cleanly. That is also
+    what lets the service distinguish "I just claimed this key" from "somebody
+    else already finished it" with a plain NULL check, instead of a status
+    column plus a background sweeper to expire abandoned claims.
+    """
+
+    __tablename__ = "idempotency_keys"
+
+    # Composite primary key: keys are scoped per endpoint, so reusing the same
+    # key string against a different route is not a false cache hit.
+    endpoint: Mapped[str] = mapped_column(Text, primary_key=True)
+    idempotency_key: Mapped[str] = mapped_column(Text, primary_key=True)
+
+    # SHA-256 of the canonical request payload. Retrying a key with different
+    # parameters is a client bug, and returning the first call's result would
+    # hide it -- so the hash is compared and the mismatch is reported.
+    request_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+
+    transfer_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey(
+            "transfers.id", name="fk_idempotency_keys_transfer_id", ondelete="RESTRICT"
+        ),
+        nullable=True,
+        # One transfer per key. Two keys pointing at the same transfer would
+        # mean idempotency had already failed. NULLs do not collide in a
+        # Postgres unique index, which is exactly the behaviour needed here.
+        unique=True,
+    )
+
+    # The original response, replayed verbatim on a retry. Re-serialising from
+    # the transfer row would look equivalent but drifts the moment the response
+    # shape changes; a replay is supposed to be what the caller saw the first
+    # time.
+    response_status: Mapped[int | None] = mapped_column(SmallInteger, nullable=True)
+    response_body: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+    completed_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+
+    __table_args__ = (
+        CheckConstraint(
+            "length(idempotency_key) BETWEEN 1 AND 255", name="key_length_sane"
+        ),
+        CheckConstraint("length(request_hash) = 64", name="request_hash_is_sha256"),
+        # All four completion columns are set together or not at all. Encodes
+        # "a row is either a fresh claim or fully complete, never half-filled"
+        # as something the database checks rather than something the service is
+        # trusted to do.
+        CheckConstraint(
+            "num_nonnulls(transfer_id, response_status, response_body, completed_at) "
+            "IN (0, 4)",
+            name="completion_is_all_or_nothing",
+        ),
+        # Supports the retention sweep described in the README. Not implemented.
+        Index("ix_idempotency_keys_created_at", "created_at"),
     )
