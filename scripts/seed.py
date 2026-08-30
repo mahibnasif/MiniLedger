@@ -30,6 +30,7 @@ from __future__ import annotations
 from sqlalchemy import text
 
 from app.db import session_scope
+from app.transfers import execute_transfer
 
 # (name, account_type, allow_negative_balance, purpose)
 CHART_OF_ACCOUNTS: list[tuple[str, str, bool, str]] = [
@@ -87,13 +88,52 @@ def seed_accounts() -> None:
             )
 
 
+# (destination account, amount in minor units)
+OPENING_BALANCES: list[tuple[str, int]] = [
+    ("wallet:alice", 50_000),
+    ("wallet:bob", 25_000),
+]
+
+
+def fund_wallets() -> None:
+    """Draw opening balances from the float into each wallet.
+
+    Each funding transfer carries a fixed, derived idempotency key rather than
+    a random one. That is what makes re-running the seed safe: the second run
+    claims the same keys, finds them already completed, and replays the
+    original results instead of doubling everyone's balance.
+
+    It is also the honest way to demonstrate the mechanism -- a deterministic
+    key is exactly what a real batch job or a cron-driven payout run would use.
+    """
+    with session_scope() as session:
+        ids = dict(
+            session.execute(text("SELECT name, id FROM accounts")).all()  # type: ignore[arg-type]
+        )
+        for wallet, amount in OPENING_BALANCES:
+            _body, was_replay = execute_transfer(
+                session,
+                idempotency_key=f"seed:opening-balance:{wallet}",
+                source_account_id=ids["house:float"],
+                destination_account_id=ids[wallet],
+                amount=amount,
+                description=f"opening balance for {wallet}",
+            )
+            print(
+                f"  {wallet:14} {amount:>8} "
+                f"{'(replayed, already funded)' if was_replay else '(funded)'}"
+            )
+
+
 def print_chart() -> None:
     with session_scope() as session:
         rows = session.execute(
             text(
                 """
-                SELECT a.name, a.account_type, a.normal_balance,
-                       a.allow_negative_balance, b.posted_debits, b.posted_credits
+                SELECT a.id, a.name, a.account_type, a.normal_balance,
+                       a.allow_negative_balance,
+                       COALESCE(b.posted_debits, 0)  AS posted_debits,
+                       COALESCE(b.posted_credits, 0) AS posted_credits
                 FROM accounts a
                 LEFT JOIN account_balances b ON b.account_id = a.id
                 ORDER BY a.name
@@ -101,16 +141,28 @@ def print_chart() -> None:
             )
         ).all()
 
-    header = f"{'account':16} {'type':10} {'normal':7} {'neg?':5} {'debits':>9} {'credits':>9}"
+    header = (
+        f"{'account':16} {'id':38} {'type':10} {'normal':7} "
+        f"{'debits':>9} {'credits':>9} {'balance':>9}"
+    )
     print(header)
     print("-" * len(header))
     for r in rows:
+        balance = (
+            r.posted_credits - r.posted_debits
+            if r.normal_balance == "credit"
+            else r.posted_debits - r.posted_credits
+        )
         print(
-            f"{r.name:16} {r.account_type:10} {r.normal_balance:7} "
-            f"{str(r.allow_negative_balance):5} {r.posted_debits:9} {r.posted_credits:9}"
+            f"{r.name:16} {str(r.id):38} {r.account_type:10} {r.normal_balance:7} "
+            f"{r.posted_debits:9} {r.posted_credits:9} {balance:9}"
         )
 
 
 if __name__ == "__main__":
+    print("accounts:")
     seed_accounts()
+    print("opening balances:")
+    fund_wallets()
+    print()
     print_chart()

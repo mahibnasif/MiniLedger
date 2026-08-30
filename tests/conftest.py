@@ -136,3 +136,31 @@ def post_raw_transfer(
     )
     session.commit()
     return transfer_id
+
+
+@pytest.fixture()
+def client(engine: Engine, session: Session):
+    """A TestClient whose requests each get their OWN database session.
+
+    Depends on `session` so the truncation in that fixture runs first, but
+    deliberately does not hand that session to the app: sharing one session
+    across requests would hide exactly the cross-connection behaviour -- row
+    locks, ON CONFLICT contention -- that this project is about.
+    """
+    from fastapi.testclient import TestClient
+
+    from app.main import app, get_session
+
+    factory = sessionmaker(bind=engine, class_=Session)
+
+    def override_get_session() -> Iterator[Session]:
+        request_session = factory()
+        try:
+            yield request_session
+        finally:
+            request_session.close()
+
+    app.dependency_overrides[get_session] = override_get_session
+    with TestClient(app) as test_client:
+        yield test_client
+    app.dependency_overrides.clear()

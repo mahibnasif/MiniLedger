@@ -200,13 +200,13 @@ def cached_balance(session: Session, account_id: uuid.UUID) -> int:
     return balance_of(normal_balance, cached_totals(session, account_id))
 
 
-def cached_all_snapshots(session: Session) -> list[AccountSnapshot]:
-    """Every account's cached totals, shaped identically to derive_all_snapshots.
+def _cached_snapshot_query():
+    """Shared SELECT behind both cached snapshot readers.
 
     LEFT JOIN again: an account that never received a posting has no row in
     account_balances at all, and must read as zero rather than vanishing.
     """
-    rows = session.execute(
+    return (
         select(
             Account.id,
             Account.name,
@@ -218,20 +218,32 @@ def cached_all_snapshots(session: Session) -> list[AccountSnapshot]:
         )
         .select_from(Account)
         .outerjoin(AccountBalance, AccountBalance.account_id == Account.id)
-        .order_by(Account.name)
-    ).all()
+    )
 
-    return [
-        AccountSnapshot(
-            account_id=r.id,
-            name=r.name,
-            normal_balance=r.normal_balance,
-            totals=AccountTotals(
-                posted_debits=r.posted_debits,
-                posted_credits=r.posted_credits,
-                entry_count=r.entry_count,
-                last_entry_id=r.last_entry_id,
-            ),
-        )
-        for r in rows
-    ]
+
+def _to_snapshot(row) -> AccountSnapshot:
+    return AccountSnapshot(
+        account_id=row.id,
+        name=row.name,
+        normal_balance=row.normal_balance,
+        totals=AccountTotals(
+            posted_debits=row.posted_debits,
+            posted_credits=row.posted_credits,
+            entry_count=row.entry_count,
+            last_entry_id=row.last_entry_id,
+        ),
+    )
+
+
+def cached_all_snapshots(session: Session) -> list[AccountSnapshot]:
+    """Every account's cached totals, shaped identically to derive_all_snapshots."""
+    rows = session.execute(_cached_snapshot_query().order_by(Account.name)).all()
+    return [_to_snapshot(r) for r in rows]
+
+
+def cached_snapshot(session: Session, account_id: uuid.UUID) -> AccountSnapshot | None:
+    """One account's cached totals, or None if the account does not exist."""
+    row = session.execute(
+        _cached_snapshot_query().where(Account.id == account_id)
+    ).one_or_none()
+    return _to_snapshot(row) if row is not None else None
