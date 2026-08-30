@@ -29,8 +29,8 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 # row-level triggers. RESTART IDENTITY resets the entry sequence so ids are
 # predictable within a test.
 TRUNCATE_ALL = text(
-    "TRUNCATE ledger_entries, transfers, account_balances, accounts "
-    "RESTART IDENTITY CASCADE"
+    "TRUNCATE idempotency_keys, ledger_entries, transfers, account_balances, "
+    "accounts RESTART IDENTITY CASCADE"
 )
 
 

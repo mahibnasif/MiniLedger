@@ -19,12 +19,21 @@ from __future__ import annotations
 import uuid
 from dataclasses import dataclass
 from datetime import datetime
+from typing import Any
 
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
-from app.errors import AccountNotFound, InsufficientFunds, InvalidTransfer
+from app import idempotency
+from app.errors import (
+    AccountNotFound,
+    IdempotencyKeyConflict,
+    InsufficientFunds,
+    InvalidTransfer,
+)
 from app.ledger import AccountTotals, balance_of
+
+TRANSFERS_ENDPOINT = "POST /transfers"
 
 
 @dataclass(frozen=True)
@@ -259,3 +268,93 @@ def post_transfer(
         description=row.description,
         created_at=row.created_at,
     )
+
+
+def _serialise(posted: PostedTransfer) -> dict[str, Any]:
+    """JSON-safe view of a transfer.
+
+    This exact dict is both returned to the caller and stored in
+    idempotency_keys.response_body, so a replay hands back what the first
+    caller saw rather than something rebuilt later from the transfer row.
+    """
+    return {
+        "id": str(posted.id),
+        "source_account_id": str(posted.source_account_id),
+        "destination_account_id": str(posted.destination_account_id),
+        "amount": posted.amount,
+        "currency": posted.currency,
+        "description": posted.description,
+        "created_at": posted.created_at.isoformat(),
+    }
+
+
+def execute_transfer(
+    session: Session,
+    *,
+    idempotency_key: str,
+    source_account_id: uuid.UUID,
+    destination_account_id: uuid.UUID,
+    amount: int,
+    description: str | None = None,
+) -> tuple[dict[str, Any], bool]:
+    """Post a transfer at most once for the given idempotency key.
+
+    Returns (response_body, was_replay).
+
+    The claim and the postings share ONE transaction, which the caller commits.
+    That is what makes the guarantee hold under concurrency: a duplicate request
+    blocks inside `claim` until this transaction resolves, and then either sees
+    the committed result or finds the key free again.
+
+    A REQUEST THAT FAILS RELEASES ITS KEY. If the transfer raises -- insufficient
+    funds, unknown account -- the caller rolls back, and the claim row is rolled
+    back with it, so the same key can be used again. That is deliberate: the
+    guarantee being sold is "at most one TRANSFER per key", not "at most one
+    attempt per key". Nothing moved, so there is nothing to protect, and the
+    alternative (persisting failures) would need a second transaction and bring
+    back the stuck-key problem this design exists to avoid.
+    """
+    request_hash = idempotency.canonical_request_hash(
+        {
+            "source_account_id": source_account_id,
+            "destination_account_id": destination_account_id,
+            "amount": amount,
+            "description": description,
+        }
+    )
+
+    existing = idempotency.claim(
+        session,
+        endpoint=TRANSFERS_ENDPOINT,
+        idempotency_key=idempotency_key,
+        request_hash=request_hash,
+    )
+
+    if not existing.is_new:
+        # Somebody already completed this key. Either they ran the same request
+        # -- replay their response verbatim -- or the client reused a key for a
+        # different request, which is a bug worth surfacing rather than hiding
+        # behind a stale but plausible-looking success.
+        if existing.stored_request_hash != request_hash:
+            raise IdempotencyKeyConflict(idempotency_key)
+        assert existing.response_body is not None  # CHECK guarantees this
+        return existing.response_body, True
+
+    posted = post_transfer(
+        session,
+        source_account_id=source_account_id,
+        destination_account_id=destination_account_id,
+        amount=amount,
+        description=description,
+    )
+    body = _serialise(posted)
+
+    idempotency.complete(
+        session,
+        endpoint=TRANSFERS_ENDPOINT,
+        idempotency_key=idempotency_key,
+        transfer_id=posted.id,
+        response_status=201,
+        response_body=body,
+    )
+    return body, False

@@ -387,10 +387,12 @@ class IdempotencyKey(Base):
         unique=True,
     )
 
-    # The original response, replayed verbatim on a retry. Re-serialising from
-    # the transfer row would look equivalent but drifts the moment the response
+    # The original response, replayed on a retry. Re-serialising from the
+    # transfer row would look equivalent but drifts the moment the response
     # shape changes; a replay is supposed to be what the caller saw the first
-    # time.
+    # time. jsonb rather than text so an operator can query these directly
+    # while debugging; the cost is that key order is normalised, so a replay is
+    # semantically identical rather than byte-identical.
     response_status: Mapped[int | None] = mapped_column(SmallInteger, nullable=True)
     response_body: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
 
