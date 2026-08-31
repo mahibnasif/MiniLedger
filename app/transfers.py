@@ -62,23 +62,24 @@ class PostedTransfer:
     created_at: datetime
 
 
-# Locks exactly one account row and reads its cached totals in the same
-# round trip. FOR UPDATE OF a locks only the accounts row; the balance row is
-# on the nullable side of an outer join and cannot be locked there anyway.
+# Takes the lock. Deliberately reads NOTHING about balances -- see the two-pass
+# explanation in _lock_accounts. This statement's only job is mutual exclusion.
 _LOCK_ACCOUNT = text(
     """
-    SELECT a.id,
-           a.name,
-           a.normal_balance,
-           a.allow_negative_balance,
-           COALESCE(b.posted_debits, 0)  AS posted_debits,
-           COALESCE(b.posted_credits, 0) AS posted_credits,
-           COALESCE(b.entry_count, 0)    AS entry_count,
-           b.last_entry_id
-    FROM accounts a
-    LEFT JOIN account_balances b ON b.account_id = a.id
-    WHERE a.id = :account_id
-    FOR UPDATE OF a
+    SELECT id, name, normal_balance, allow_negative_balance
+    FROM accounts
+    WHERE id = :account_id
+    FOR UPDATE
+    """
+)
+
+# Reads the cached totals. Issued only AFTER every lock is held, as a separate
+# statement, so that it gets a fresh snapshot.
+_READ_TOTALS = text(
+    """
+    SELECT posted_debits, posted_credits, entry_count, last_entry_id
+    FROM account_balances
+    WHERE account_id = :account_id
     """
 )
 
@@ -108,24 +109,64 @@ def _lock_accounts(
     finds them and sort afterwards. Explicit sequential statements are the only
     way to actually control the order, and two extra round trips is a cheap
     price for an invariant instead of a hope.
-    """
-    locked: dict[uuid.UUID, LockedAccount] = {}
 
-    for account_id in sorted(set(account_ids), key=str):
+    WHY BALANCES ARE READ IN A SECOND PASS, AND NOT IN THE LOCKING QUERY:
+
+    This is the subtle one, and getting it wrong produced a real overdraft that
+    only the concurrent test caught.
+
+    The obvious implementation joins account_balances into the locking SELECT
+    and reads the balance in the same round trip. It is wrong. Under READ
+    COMMITTED a statement fixes its snapshot when it STARTS. If that statement
+    then blocks waiting for a row lock, the snapshot does not advance. When the
+    lock is finally granted, Postgres re-reads the *locked* row to its latest
+    version (EvalPlanQual), but joined tables that were not locked are still
+    read from the original, now-stale snapshot.
+
+    So ten concurrent spenders would each block on Alice's row, each acquire it
+    in turn, and each still see the balance as it was before any of them
+    committed. All ten would consider themselves affordable. The lock was doing
+    its job; the read was simply from the wrong point in time.
+
+    Reading the totals in a SEPARATE statement, after every lock is held, fixes
+    it: a new statement takes a new snapshot. Any transaction that could have
+    changed these balances had to hold these same account locks, and had to
+    commit before releasing them -- so by the time we hold the locks, every such
+    transaction is committed and visible to a fresh snapshot.
+    """
+    ordered_ids = sorted(set(account_ids), key=str)
+
+    # Pass 1: acquire every lock, in order. No balance is read here.
+    rows: dict[uuid.UUID, object] = {}
+    for account_id in ordered_ids:
         row = session.execute(_LOCK_ACCOUNT, {"account_id": account_id}).one_or_none()
         if row is None:
             raise AccountNotFound(account_id)
-        locked[row.id] = LockedAccount(
-            id=row.id,
-            name=row.name,
-            normal_balance=row.normal_balance,
-            allow_negative_balance=row.allow_negative_balance,
-            totals=AccountTotals(
-                posted_debits=row.posted_debits,
-                posted_credits=row.posted_credits,
-                entry_count=row.entry_count,
-                last_entry_id=row.last_entry_id,
-            ),
+        rows[row.id] = row
+
+    # Pass 2: now that no one else can be mid-transfer on these accounts, read
+    # the balances with fresh snapshots.
+    locked: dict[uuid.UUID, LockedAccount] = {}
+    for account_id, row in rows.items():
+        totals_row = session.execute(
+            _READ_TOTALS, {"account_id": account_id}
+        ).one_or_none()
+        totals = (
+            AccountTotals(
+                posted_debits=totals_row.posted_debits,
+                posted_credits=totals_row.posted_credits,
+                entry_count=totals_row.entry_count,
+                last_entry_id=totals_row.last_entry_id,
+            )
+            if totals_row is not None
+            else AccountTotals()
+        )
+        locked[account_id] = LockedAccount(
+            id=row.id,  # type: ignore[attr-defined]
+            name=row.name,  # type: ignore[attr-defined]
+            normal_balance=row.normal_balance,  # type: ignore[attr-defined]
+            allow_negative_balance=row.allow_negative_balance,  # type: ignore[attr-defined]
+            totals=totals,
         )
     return locked
 

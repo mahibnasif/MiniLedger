@@ -22,6 +22,21 @@ def build_engine(url: str | None = None) -> Engine:
         # Recycle dead connections instead of surfacing them as errors. Postgres
         # in Docker gets restarted a lot during development.
         pool_pre_ping=True,
+        # POOL SIZING IS A CORRECTNESS-ADJACENT CHOICE HERE.
+        #
+        # A duplicate request does not fail fast -- it BLOCKS inside the
+        # idempotency claim, holding its connection, until the original
+        # transaction commits. So the pool has to be wide enough for the
+        # expected number of simultaneously blocked retries, or a burst of
+        # duplicates exhausts the pool and starts timing out requests that
+        # would otherwise have succeeded.
+        #
+        # 20 + 10 is generous for a single-node demo. In production this would
+        # be derived from Postgres max_connections divided across workers, with
+        # a proper pooler in front.
+        pool_size=20,
+        max_overflow=10,
+        pool_timeout=30,
         # Never autocommit a stray statement: every write in this project has to
         # sit inside a transaction we opened on purpose.
         future=True,

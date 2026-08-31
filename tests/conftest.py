@@ -164,3 +164,55 @@ def client(engine: Engine, session: Session):
     with TestClient(app) as test_client:
         yield test_client
     app.dependency_overrides.clear()
+
+
+@pytest.fixture()
+def live_server(engine: Engine, session: Session) -> Iterator[str]:
+    """A real uvicorn server on an ephemeral port, in a background thread.
+
+    TestClient is not good enough for the concurrency tests. It drives the ASGI
+    app through a portal, which does not reproduce N independent clients each
+    holding their own connection and contending on the same index. Those tests
+    need genuine sockets and genuine parallel database connections, so they get
+    a genuine server.
+
+    The server runs in this process, so dependency_overrides still applies and
+    requests can be pointed at the test database.
+    """
+    import threading
+    import time
+
+    import uvicorn
+
+    from app.main import app, get_session
+
+    factory = sessionmaker(bind=engine, class_=Session)
+
+    def override_get_session() -> Iterator[Session]:
+        request_session = factory()
+        try:
+            yield request_session
+        finally:
+            request_session.close()
+
+    app.dependency_overrides[get_session] = override_get_session
+
+    # port=0 lets the OS pick a free port, so parallel test runs cannot collide.
+    config = uvicorn.Config(app, host="127.0.0.1", port=0, log_level="error")
+    server = uvicorn.Server(config)
+    thread = threading.Thread(target=server.run, daemon=True)
+    thread.start()
+
+    deadline = time.monotonic() + 30
+    while not (server.started and server.servers):
+        if time.monotonic() > deadline:
+            raise RuntimeError("uvicorn did not start within 30s")
+        time.sleep(0.02)
+
+    port = server.servers[0].sockets[0].getsockname()[1]
+    try:
+        yield f"http://127.0.0.1:{port}"
+    finally:
+        server.should_exit = True
+        thread.join(timeout=15)
+        app.dependency_overrides.clear()
