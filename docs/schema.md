@@ -221,6 +221,7 @@ hold `INSERT` and `SELECT` only, with no `TRUNCATE` grant — see the README's
 |---|---|
 | `0001_create_core_ledger_tables` | The four tables, plus every constraint SQLAlchemy can express declaratively. |
 | `0002_enforce_append_only_and_balanced_` | The two invariants it cannot: append-only enforcement, and the deferred balancing trigger. |
+| `0003_add_idempotency_keys_table` | Idempotency keys, claimed in the same transaction as the transfer. See [idempotency.md](idempotency.md). |
 
 Split this way because a `CHECK` sees one row at a time and cannot forbid an
 operation. Everything in 0002 is necessarily procedural.
@@ -233,5 +234,5 @@ cp .env.example .env
 python -m venv .venv && .venv/Scripts/python -m pip install -r requirements-dev.txt
 .venv/Scripts/alembic upgrade head   # apply 0001 and 0002
 .venv/Scripts/python -m scripts.seed # chart of accounts
-.venv/Scripts/python -m pytest       # 39 tests
+.venv/Scripts/python -m pytest       # full suite
 ```
