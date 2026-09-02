@@ -28,7 +28,7 @@ from __future__ import annotations
 import uuid
 from dataclasses import dataclass
 
-from sqlalchemy import case, func, select
+from sqlalchemy import BigInteger, case, cast, func, select
 from sqlalchemy.orm import Session
 
 from app.models import Account, AccountBalance, LedgerEntry
@@ -80,6 +80,10 @@ def balance_of(normal_balance: str, totals: AccountTotals) -> int:
 
 def format_minor_units(amount: int, currency: str = "USD") -> str:
     """Render cents for humans. Display only -- never feed this back into maths."""
+    # int() rather than trusting the caller: a Decimal arriving from an
+    # un-cast SUM would otherwise blow up on the :02d below, and it is not
+    # worth a crash in a reporting path.
+    amount = int(amount)
     sign = "-" if amount < 0 else ""
     whole, cents = divmod(abs(amount), 100)
     return f"{sign}{whole}.{cents:02d} {currency}"
@@ -90,11 +94,25 @@ def format_minor_units(amount: int, currency: str = "USD") -> str:
 # Both totals come from one pass over the entries: SUM(CASE ...) rather than two
 # separate queries, so the debit and credit figures are guaranteed to be read
 # from the same snapshot of the table.
-_DEBIT_TOTAL = func.coalesce(
-    func.sum(case((LedgerEntry.direction == DEBIT, LedgerEntry.amount), else_=0)), 0
+#
+# The cast to BIGINT is not cosmetic. Postgres widens SUM(bigint) to NUMERIC to
+# avoid overflow, which psycopg faithfully returns as a Python Decimal. Decimal
+# compares equal to int, so every arithmetic assertion still passes and the
+# difference stays invisible -- right up until something does integer-only
+# formatting on the result and dies. Money is integer minor units everywhere
+# else in this codebase; it is integer minor units here too.
+_DEBIT_TOTAL = cast(
+    func.coalesce(
+        func.sum(case((LedgerEntry.direction == DEBIT, LedgerEntry.amount), else_=0)), 0
+    ),
+    BigInteger,
 )
-_CREDIT_TOTAL = func.coalesce(
-    func.sum(case((LedgerEntry.direction == CREDIT, LedgerEntry.amount), else_=0)), 0
+_CREDIT_TOTAL = cast(
+    func.coalesce(
+        func.sum(case((LedgerEntry.direction == CREDIT, LedgerEntry.amount), else_=0)),
+        0,
+    ),
+    BigInteger,
 )
 
 

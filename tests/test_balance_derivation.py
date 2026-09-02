@@ -230,3 +230,39 @@ def test_cached_reads_come_from_the_cache_table_not_the_log(
     assert cached["wallet:alice"].balance == 9999
     # No cache row at all must read as zero, not disappear.
     assert cached["wallet:bob"].balance == 0
+
+
+# --- Regression: money stays integral ----------------------------------------
+
+
+def test_derived_totals_are_ints_not_decimals(
+    session: Session, accounts: dict[str, uuid.UUID]
+) -> None:
+    """Regression guard for a bug that hid behind Decimal == int.
+
+    Postgres widens SUM(bigint) to NUMERIC to avoid overflow, and psycopg
+    faithfully returns that as a Python Decimal. Decimal compares equal to int,
+    so every arithmetic assertion in this suite kept passing while the types
+    were quietly wrong -- right up until integer-only formatting hit one and
+    raised ValueError. Money is integer minor units, end to end.
+    """
+    post_raw_transfer(
+        session,
+        debit_account_id=accounts["house:float"],
+        credit_account_id=accounts["wallet:alice"],
+        amount=50_000,
+    )
+
+    totals = derive_totals(session, accounts["wallet:alice"])
+    assert isinstance(totals.posted_credits, int)
+    assert isinstance(totals.posted_debits, int)
+
+    balance = derive_balance(session, accounts["wallet:alice"])
+    assert isinstance(balance, int)
+    # The call that actually blew up.
+    assert format_minor_units(balance) == "500.00 USD"
+
+    snapshot = next(
+        s for s in derive_all_snapshots(session) if s.name == "wallet:alice"
+    )
+    assert isinstance(snapshot.balance, int)
