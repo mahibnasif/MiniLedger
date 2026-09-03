@@ -235,4 +235,5 @@ python -m venv .venv && .venv/Scripts/python -m pip install -r requirements-dev.
 .venv/Scripts/alembic upgrade head   # apply 0001 and 0002
 .venv/Scripts/python -m scripts.seed # chart of accounts
 .venv/Scripts/python -m pytest       # full suite
+.venv/Scripts/python -m scripts.reconcile   # audit the ledger (exit 0 = clean)
 ```
