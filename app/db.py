@@ -37,6 +37,15 @@ def build_engine(url: str | None = None) -> Engine:
         pool_size=20,
         max_overflow=10,
         pool_timeout=30,
+        # Bound how long a connection attempt can hang.
+        #
+        # Without this, pointing the app at an unreachable host does not fail --
+        # it BLOCKS, indefinitely, waiting on a TCP connect that will never be
+        # answered. For the web app that is a stuck request. For the scheduled
+        # reconciliation job it is worse: the job never finishes, never exits
+        # non-zero, and never alerts. It just quietly stops running, and the
+        # absence of a failure looks exactly like a pass.
+        connect_args={"connect_timeout": 10},
         # Never autocommit a stray statement: every write in this project has to
         # sit inside a transaction we opened on purpose.
         future=True,
