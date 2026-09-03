@@ -216,3 +216,25 @@ def live_server(engine: Engine, session: Session) -> Iterator[str]:
         server.should_exit = True
         thread.join(timeout=15)
         app.dependency_overrides.clear()
+
+
+@pytest.fixture()
+def funded(session: Session, accounts: dict[str, uuid.UUID]) -> dict[str, uuid.UUID]:
+    """A small, healthy ledger: Alice funded with 50000, Bob with 25000.
+
+    Funded through execute_transfer rather than raw SQL, so every transfer has
+    an idempotency key and the provenance check has a clean baseline.
+    """
+    from app.transfers import execute_transfer
+
+    for wallet, amount in (("wallet:alice", 50_000), ("wallet:bob", 25_000)):
+        execute_transfer(
+            session,
+            idempotency_key=f"seed:{wallet}",
+            source_account_id=accounts["house:float"],
+            destination_account_id=accounts[wallet],
+            amount=amount,
+            description=f"opening balance for {wallet}",
+        )
+    session.commit()
+    return accounts
