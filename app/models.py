@@ -420,3 +420,118 @@ class IdempotencyKey(Base):
         # Supports the retention sweep described in the README. Not implemented.
         Index("ix_idempotency_keys_created_at", "created_at"),
     )
+
+
+class Card(Base):
+    """A virtual card issued through Stripe, bound to one ledger account.
+
+    This table is the join between Stripe's world and ours. Stripe knows about
+    cards and cardholders; the ledger knows about accounts. An authorization
+    arrives carrying a Stripe card id and nothing else, so without this mapping
+    there is no way to know whose money is being spent.
+    """
+
+    __tablename__ = "cards"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, server_default=text("gen_random_uuid()")
+    )
+
+    # Unique: one row per Stripe card. Two rows for the same card would make
+    # "whose account does this authorisation hit?" ambiguous at exactly the
+    # moment it must not be.
+    stripe_card_id: Mapped[str] = mapped_column(Text, nullable=False, unique=True)
+    stripe_cardholder_id: Mapped[str] = mapped_column(Text, nullable=False)
+
+    account_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("accounts.id", name="fk_cards_account_id", ondelete="RESTRICT"),
+        nullable=False,
+    )
+
+    # Display only. The full number is never stored, never logged, and never
+    # reaches this database -- Stripe holds it, we hold a reference.
+    last4: Mapped[str | None] = mapped_column(String(4), nullable=True)
+
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+
+    __table_args__ = (
+        CheckConstraint("length(stripe_card_id) > 0", name="stripe_card_id_not_blank"),
+        Index("ix_cards_account_id", "account_id"),
+    )
+
+
+class CardAuthorization(Base):
+    """Every authorisation decision we made, approved or declined.
+
+    Declines are the reason this table exists. An approval leaves a transfer
+    behind; a decline leaves nothing at all, so without a record here there
+    would be no way to answer "why was my card refused?" -- which is the single
+    most common support question a card programme gets.
+
+    Keyed on Stripe's authorisation id, which also makes webhook delivery
+    idempotent: Stripe retries, and a retry finds the decision already recorded
+    and replays it rather than deciding again against a balance that has since
+    moved.
+    """
+
+    __tablename__ = "card_authorizations"
+
+    stripe_authorization_id: Mapped[str] = mapped_column(Text, primary_key=True)
+
+    card_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("cards.id", name="fk_card_authorizations_card_id", ondelete="RESTRICT"),
+        nullable=False,
+    )
+
+    amount: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    currency: Mapped[str] = mapped_column(
+        String(3), nullable=False, server_default=text(f"'{CURRENCY}'")
+    )
+    merchant_name: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+    decision: Mapped[str] = mapped_column(Text, nullable=False)
+    decline_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+    transfer_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey(
+            "transfers.id",
+            name="fk_card_authorizations_transfer_id",
+            ondelete="RESTRICT",
+        ),
+        nullable=True,
+        unique=True,
+    )
+
+    # What the ledger said at the moment of the decision. Balances move
+    # constantly, so "it had enough at the time" is unprovable after the fact
+    # unless the figure is captured here. Disputes are won and lost on this.
+    balance_at_decision: Mapped[int] = mapped_column(BigInteger, nullable=False)
+
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+
+    __table_args__ = (
+        CheckConstraint("amount > 0", name="amount_positive"),
+        CheckConstraint(
+            "decision IN ('approved', 'declined')", name="decision_known"
+        ),
+        # An approval must point at the money it moved; a decline must say why
+        # and must NOT point at a transfer. Makes an internally contradictory
+        # decision record unrepresentable rather than merely unlikely.
+        CheckConstraint(
+            "(decision = 'approved' AND transfer_id IS NOT NULL "
+            "                      AND decline_reason IS NULL) "
+            "OR "
+            "(decision = 'declined' AND transfer_id IS NULL "
+            "                      AND decline_reason IS NOT NULL)",
+            name="decision_matches_outcome",
+        ),
+        Index("ix_card_authorizations_card_id", "card_id"),
+        Index("ix_card_authorizations_created_at", "created_at"),
+    )
