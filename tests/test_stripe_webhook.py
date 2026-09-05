@@ -24,7 +24,10 @@ from fastapi.testclient import TestClient
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
+from pydantic import ValidationError
+
 from app import webhooks
+from app.stripe_client import StripeNotConfigured
 
 TEST_SECRET = "whsec_test_only_never_a_real_secret"
 
@@ -156,14 +159,81 @@ def test_malformed_json_with_a_valid_signature_is_rejected(
 
 
 def test_missing_configuration_returns_503_not_500(
-    client: TestClient, card: str
+    client: TestClient, card: str, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """No signing secret configured. "Not set up" is not the same as "broken"."""
+    """No signing secret configured. "Not set up" is not the same as "broken".
+
+    The unconfigured state is injected rather than relying on .env happening to
+    be empty. It was, once, and this test passed for that reason alone -- then
+    a local secret was added for a demo and it started failing. A test whose
+    result depends on a gitignored file is worse than no test.
+    """
+
+    def unconfigured() -> str:
+        raise StripeNotConfigured("STRIPE_WEBHOOK_SECRET is not set.")
+
+    monkeypatch.setattr(webhooks, "get_webhook_secret", unconfigured)
+
     payload = authorization_event()
     response = post(client, payload, sign(payload))
 
     assert response.status_code == 503
     assert response.json()["error"] == "StripeNotConfigured"
+
+
+@pytest.mark.parametrize("value", [None, "", "whsec_replace_me"])
+def test_get_webhook_secret_rejects_unset_values(
+    monkeypatch: pytest.MonkeyPatch, value: str | None
+) -> None:
+    """The placeholder from .env.example counts as unset.
+
+    Otherwise a fresh clone would appear configured and then fail every
+    signature check with a confusing error instead of a clear one.
+    """
+    from app import stripe_client
+
+    settings = stripe_client.get_settings()
+    monkeypatch.setattr(
+        stripe_client,
+        "get_settings",
+        lambda: settings.model_copy(update={"stripe_webhook_secret": value}),
+    )
+
+    with pytest.raises(StripeNotConfigured, match="STRIPE_WEBHOOK_SECRET"):
+        stripe_client.get_webhook_secret()
+
+
+@pytest.mark.parametrize("value", [None, "", "sk_test_replace_me"])
+def test_get_client_rejects_unset_api_keys(
+    monkeypatch: pytest.MonkeyPatch, value: str | None
+) -> None:
+    from app import stripe_client
+
+    settings = stripe_client.get_settings()
+    monkeypatch.setattr(
+        stripe_client,
+        "get_settings",
+        lambda: settings.model_copy(update={"stripe_api_key": value}),
+    )
+
+    with pytest.raises(StripeNotConfigured, match="STRIPE_API_KEY"):
+        stripe_client.get_client()
+
+
+def test_live_stripe_keys_are_refused_at_config_time() -> None:
+    """The guard that stops this project ever moving real money.
+
+    There is no authorisation layer, no fraud control, and a webhook handler
+    that approves card spend. A live key is treated as a configuration bug and
+    killed at boot rather than trusted to be caught in review.
+    """
+    from app.config import Settings
+
+    with pytest.raises(ValidationError, match="test-mode key"):
+        Settings(
+            database_url="postgresql+psycopg://x:y@localhost/z",
+            stripe_api_key="sk_live_this_would_move_real_money",
+        )
 
 
 # --- Decisions ---------------------------------------------------------------
