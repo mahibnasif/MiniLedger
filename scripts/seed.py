@@ -52,6 +52,17 @@ CHART_OF_ACCOUNTS: list[tuple[str, str, bool, str]] = [
         False,
         "Customer wallet. Money we hold on Bob's behalf.",
     ),
+    (
+        "house:card_settlement",
+        "liability",
+        False,
+        "Where approved card spending lands. A liability because once an "
+        "authorisation is approved we owe that money onward to the card "
+        "network -- it has left the customer's wallet but not yet left the "
+        "business. Restricted from going negative: no implemented flow debits "
+        "it, so if reconciliation ever reports it negative, that is a bug "
+        "worth hearing about.",
+    ),
 ]
 
 
@@ -142,7 +153,7 @@ def print_chart() -> None:
         ).all()
 
     header = (
-        f"{'account':16} {'id':38} {'type':10} {'normal':7} "
+        f"{'account':22} {'id':38} {'type':10} {'normal':7} "
         f"{'debits':>9} {'credits':>9} {'balance':>9}"
     )
     print(header)
@@ -154,7 +165,7 @@ def print_chart() -> None:
             else r.posted_debits - r.posted_credits
         )
         print(
-            f"{r.name:16} {str(r.id):38} {r.account_type:10} {r.normal_balance:7} "
+            f"{r.name:22} {str(r.id):38} {r.account_type:10} {r.normal_balance:7} "
             f"{r.posted_debits:9} {r.posted_credits:9} {balance:9}"
         )
 

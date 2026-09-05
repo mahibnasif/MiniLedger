@@ -149,7 +149,8 @@ def client(engine: Engine, session: Session):
     """
     from fastapi.testclient import TestClient
 
-    from app.main import app, get_session
+    from app.db import get_session
+    from app.main import app
 
     factory = sessionmaker(bind=engine, class_=Session)
 
@@ -184,7 +185,8 @@ def live_server(engine: Engine, session: Session) -> Iterator[str]:
 
     import uvicorn
 
-    from app.main import app, get_session
+    from app.db import get_session
+    from app.main import app
 
     factory = sessionmaker(bind=engine, class_=Session)
 
@@ -238,3 +240,33 @@ def funded(session: Session, accounts: dict[str, uuid.UUID]) -> dict[str, uuid.U
         )
     session.commit()
     return accounts
+
+
+@pytest.fixture()
+def settlement(session: Session, funded: dict[str, uuid.UUID]) -> dict[str, uuid.UUID]:
+    """The funded chart of accounts plus the card settlement account."""
+    from app.issuing import SETTLEMENT_ACCOUNT_NAME
+
+    settlement_id = session.execute(
+        text(
+            "INSERT INTO accounts (name, account_type, allow_negative_balance) "
+            "VALUES (:name, 'liability', false) RETURNING id"
+        ),
+        {"name": SETTLEMENT_ACCOUNT_NAME},
+    ).scalar_one()
+    session.commit()
+    return {**funded, SETTLEMENT_ACCOUNT_NAME: settlement_id}
+
+
+@pytest.fixture()
+def card(session: Session, settlement: dict[str, uuid.UUID]) -> str:
+    """A Stripe card bound to Alice's wallet, which holds 50000."""
+    session.execute(
+        text(
+            "INSERT INTO cards (stripe_card_id, stripe_cardholder_id, account_id, last4) "
+            "VALUES ('ic_test_alice', 'ich_test_alice', :account_id, '4242')"
+        ),
+        {"account_id": settlement["wallet:alice"]},
+    )
+    session.commit()
+    return "ic_test_alice"
