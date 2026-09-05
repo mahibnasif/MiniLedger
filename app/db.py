@@ -80,3 +80,22 @@ def session_scope() -> Iterator[Session]:
         raise
     finally:
         session.close()
+
+
+def get_session() -> Iterator[Session]:
+    """FastAPI request-scoped session dependency.
+
+    Lives here rather than in app/main.py so that every router depends on the
+    SAME callable. FastAPI's dependency_overrides is a single non-recursive
+    lookup -- overriding a placeholder that forwards to the real dependency
+    would silently leave the forwarded-to one unoverridden, and tests would
+    quietly run against the development database.
+
+    Does not commit or roll back. Each route owns its own transaction
+    boundary explicitly; see the note at the top of app/main.py.
+    """
+    session = SessionLocal()
+    try:
+        yield session
+    finally:
+        session.close()

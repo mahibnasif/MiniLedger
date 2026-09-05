@@ -14,14 +14,13 @@ about. For a money endpoint it should not be a question at all.
 from __future__ import annotations
 
 import uuid
-from collections.abc import Iterator
 from typing import Annotated
 
 from fastapi import Depends, FastAPI, Header, Response
 from fastapi.responses import JSONResponse
 from sqlalchemy.orm import Session
 
-from app.db import SessionLocal
+from app.db import get_session
 from app.errors import (
     AccountNotFound,
     IdempotencyKeyConflict,
@@ -32,6 +31,7 @@ from app.errors import (
 from app.ledger import AccountSnapshot, cached_all_snapshots, cached_snapshot
 from app.schemas import AccountResponse, TransferRequest
 from app.transfers import execute_transfer
+from app.webhooks import router as webhooks_router
 
 app = FastAPI(
     title="MiniLedger",
@@ -52,12 +52,7 @@ STATUS_BY_ERROR: dict[type[LedgerError], int] = {
 }
 
 
-def get_session() -> Iterator[Session]:
-    session = SessionLocal()
-    try:
-        yield session
-    finally:
-        session.close()
+app.include_router(webhooks_router)
 
 
 @app.exception_handler(LedgerError)
