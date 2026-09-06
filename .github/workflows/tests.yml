@@ -1,0 +1,104 @@
+name: tests
+
+# Runs the whole suite against a real PostgreSQL 15 on a clean machine.
+#
+# That last part is the point. "It works" is only worth something if it works
+# somewhere that is not the laptop it was written on -- no .env file, no
+# leftover database, no locally installed tools. Everything below is driven by
+# environment variables, which is why app/config.py reads .env *or* the real
+# environment rather than requiring the file.
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+
+    strategy:
+      fail-fast: false
+      matrix:
+        # The README claims 3.11+. This is what makes that claim true rather
+        # than hopeful -- it is developed on 3.13, so 3.11 would otherwise
+        # never be exercised.
+        python-version: ["3.11", "3.13"]
+
+    services:
+      postgres:
+        image: postgres:15
+        env:
+          POSTGRES_USER: miniledger
+          POSTGRES_PASSWORD: miniledger
+          POSTGRES_DB: miniledger
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U miniledger -d miniledger"
+          --health-interval 2s
+          --health-timeout 3s
+          --health-retries 30
+
+    env:
+      DATABASE_URL: postgresql+psycopg://miniledger:miniledger@localhost:5432/miniledger
+      TEST_DATABASE_URL: postgresql+psycopg://miniledger:miniledger@localhost:5432/miniledger_test
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+
+      - name: Install dependencies
+        run: pip install -r requirements-dev.txt
+
+      - name: Create the test database
+        # docker-compose.yml does this via an initdb script, but a GitHub
+        # service container does not run those, so it is created explicitly.
+        env:
+          PGPASSWORD: miniledger
+        run: |
+          psql -h localhost -U miniledger -d miniledger \
+            -c 'CREATE DATABASE miniledger_test OWNER miniledger;'
+
+      - name: Lint
+        run: ruff check .
+
+      - name: Check formatting
+        run: ruff format --check .
+
+      - name: Apply migrations
+        run: alembic upgrade head
+
+      - name: Run the suite
+        run: pytest
+
+      - name: Seed, then reconcile a healthy ledger
+        # Guards the demo path, which the unit tests do not touch. Exit 0 means
+        # every balance is supported by the entry log.
+        run: |
+          python -m scripts.seed
+          python -m scripts.reconcile
+
+      - name: Reconciliation must FAIL on a corrupted ledger
+        # The inverse assertion, and the one that matters: a reconciler that
+        # cannot fail is worthless. Each scenario must exit non-zero.
+        run: |
+          set -e
+          for scenario in tampered-entry cache-drift double-transfer; do
+            psql -h localhost -U miniledger -d miniledger -q -c \
+              'TRUNCATE card_authorizations, cards, idempotency_keys, ledger_entries,
+                        transfers, account_balances, accounts RESTART IDENTITY CASCADE;'
+            python -m scripts.seed > /dev/null
+            python -m scripts.break_ledger --scenario "$scenario" > /dev/null
+            if python -m scripts.reconcile > /dev/null 2>&1; then
+              echo "FAIL: reconciliation passed a ledger broken by $scenario"
+              exit 1
+            fi
+            echo "ok: $scenario was caught"
+          done
+        env:
+          PGPASSWORD: miniledger
