@@ -97,7 +97,9 @@ def main(argv: list[str] | None = None) -> int:
         return 2
 
     payload = build_event(args.card, args.amount, args.authorization_id, args.merchant)
-    signature = sign(payload, "whsec_deliberately_wrong" if args.secret_mismatch else secret)
+    signature = sign(
+        payload, "whsec_deliberately_wrong" if args.secret_mismatch else secret
+    )
 
     request = urllib.request.Request(
         args.url,

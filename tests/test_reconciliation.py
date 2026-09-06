@@ -12,7 +12,6 @@ import uuid
 from collections.abc import Iterator
 from contextlib import contextmanager
 
-import pytest
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
@@ -63,7 +62,9 @@ def test_untouched_accounts_do_not_produce_findings(
 ) -> None:
     """wallet:bob has entries; an account with none must still reconcile."""
     session.execute(
-        text("INSERT INTO accounts (name, account_type) VALUES ('wallet:dave', 'liability')")
+        text(
+            "INSERT INTO accounts (name, account_type) VALUES ('wallet:dave', 'liability')"
+        )
     )
     session.commit()
     assert reconcile(session).ok
@@ -116,9 +117,7 @@ def test_tampered_entry_report_names_the_guilty_entry(
         )
     session.commit()
 
-    drift = next(
-        f for f in reconcile(session).findings if f.check == "balance_drift"
-    )
+    drift = next(f for f in reconcile(session).findings if f.check == "balance_drift")
     assert drift.subject == "wallet:alice"
 
     body = "\n".join(drift.details)
@@ -126,13 +125,9 @@ def test_tampered_entry_report_names_the_guilty_entry(
     assert "transfers that no longer balance" in body
 
 
-def test_deleted_entry_is_caught(
-    session: Session, funded: dict[str, uuid.UUID]
-) -> None:
+def test_deleted_entry_is_caught(session: Session, funded: dict[str, uuid.UUID]) -> None:
     """A removed leg leaves a one-sided transfer."""
-    entry_id = session.execute(
-        text("SELECT min(id) FROM ledger_entries")
-    ).scalar_one()
+    entry_id = session.execute(text("SELECT min(id) FROM ledger_entries")).scalar_one()
 
     with _triggers_disabled(session, "ledger_entries"):
         session.execute(
@@ -160,8 +155,7 @@ def test_consistently_edited_legs_are_still_caught(
     with _triggers_disabled(session, "ledger_entries"):
         session.execute(
             text(
-                "UPDATE ledger_entries SET amount = amount + 5000 "
-                "WHERE transfer_id = :t"
+                "UPDATE ledger_entries SET amount = amount + 5000 WHERE transfer_id = :t"
             ),
             {"t": transfer_id},
         )
@@ -176,9 +170,7 @@ def test_consistently_edited_legs_are_still_caught(
 # --- Scenario 2: the cache was edited, the log is fine -----------------------
 
 
-def test_cache_drift_is_caught(
-    session: Session, funded: dict[str, uuid.UUID]
-) -> None:
+def test_cache_drift_is_caught(session: Session, funded: dict[str, uuid.UUID]) -> None:
     session.execute(
         text(
             "UPDATE account_balances SET posted_credits = posted_credits + 5000 "

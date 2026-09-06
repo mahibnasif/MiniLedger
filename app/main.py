@@ -148,9 +148,7 @@ def create_transfer(
 
 
 @app.get("/accounts/{account_id}", response_model=AccountResponse)
-def get_account(
-    account_id: uuid.UUID, session: Annotated[Session, Depends(get_session)]
-):
+def get_account(account_id: uuid.UUID, session: Annotated[Session, Depends(get_session)]):
     snapshot = cached_snapshot(session, account_id)
     if snapshot is None:
         raise AccountNotFound(account_id)

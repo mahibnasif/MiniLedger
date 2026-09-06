@@ -30,9 +30,7 @@ def test_health(client: TestClient) -> None:
     assert client.get("/health").json() == {"status": "ok"}
 
 
-def test_create_transfer(
-    client: TestClient, accounts: dict[str, uuid.UUID]
-) -> None:
+def test_create_transfer(client: TestClient, accounts: dict[str, uuid.UUID]) -> None:
     response = client.post(
         "/transfers",
         json=_body(accounts, description="opening"),
@@ -186,9 +184,7 @@ def test_currency_is_optional_and_does_not_affect_the_hash(
 
 
 def test_list_accounts(client: TestClient, accounts: dict[str, uuid.UUID]) -> None:
-    client.post(
-        "/transfers", json=_body(accounts), headers={"Idempotency-Key": "k-1"}
-    )
+    client.post("/transfers", json=_body(accounts), headers={"Idempotency-Key": "k-1"})
     listed = {a["name"]: a for a in client.get("/accounts").json()}
 
     assert set(listed) == {"house:float", "wallet:alice", "wallet:bob"}

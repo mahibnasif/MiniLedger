@@ -25,7 +25,7 @@ from __future__ import annotations
 import argparse
 import json
 import sys
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from sqlalchemy.exc import SQLAlchemyError
 
@@ -46,7 +46,7 @@ def _redacted_target() -> str:
 
 
 def render(report: ReconciliationReport) -> str:
-    stamp = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%SZ")
+    stamp = datetime.now(UTC).strftime("%Y-%m-%d %H:%M:%SZ")
     lines = [
         "MiniLedger reconciliation",
         f"  run at    {stamp}",
@@ -73,8 +73,7 @@ def render(report: ReconciliationReport) -> str:
         lines.append("")
 
     lines.append(
-        "Balances are NOT repaired automatically. Investigate the entries "
-        "named above;"
+        "Balances are NOT repaired automatically. Investigate the entries named above;"
     )
     lines.append(
         "correct a genuine error by posting a compensating transfer, never by "

@@ -98,7 +98,9 @@ def test_every_transfer_still_sums_to_zero(
     )
     session.commit()
     assert (
-        session.execute(text("SELECT SUM(signed_amount) FROM ledger_entries")).scalar_one()
+        session.execute(
+            text("SELECT SUM(signed_amount) FROM ledger_entries")
+        ).scalar_one()
         == 0
     )
 

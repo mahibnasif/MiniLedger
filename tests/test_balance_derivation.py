@@ -24,7 +24,6 @@ from app.ledger import (
 )
 from tests.conftest import post_raw_transfer
 
-
 # --- The sign rule, with no database involved --------------------------------
 
 
@@ -86,15 +85,19 @@ def test_funding_a_wallet_moves_both_sides(
 
 
 def test_debit_normal_account_reads_the_other_way(session: Session) -> None:
-    cash_id, wallet_id = session.execute(
-        text(
-            """
+    cash_id, wallet_id = (
+        session.execute(
+            text(
+                """
             INSERT INTO accounts (name, account_type, allow_negative_balance)
             VALUES ('house:cash', 'asset', true), ('wallet:carol', 'liability', false)
             RETURNING id
             """
+            )
         )
-    ).scalars().all()
+        .scalars()
+        .all()
+    )
     session.commit()
 
     # A deposit: our bank cash goes up, and so does what we owe the customer.
@@ -159,7 +162,9 @@ def test_whole_ledger_sums_to_zero(
         amount=2_500,
     )
 
-    net = session.execute(text("SELECT SUM(signed_amount) FROM ledger_entries")).scalar_one()
+    net = session.execute(
+        text("SELECT SUM(signed_amount) FROM ledger_entries")
+    ).scalar_one()
     assert net == 0
 
 
@@ -262,7 +267,5 @@ def test_derived_totals_are_ints_not_decimals(
     # The call that actually blew up.
     assert format_minor_units(balance) == "500.00 USD"
 
-    snapshot = next(
-        s for s in derive_all_snapshots(session) if s.name == "wallet:alice"
-    )
+    snapshot = next(s for s in derive_all_snapshots(session) if s.name == "wallet:alice")
     assert isinstance(snapshot.balance, int)

@@ -114,7 +114,7 @@ def issue(account_name: str) -> int:
     print(f"  last4      {card.last4}")
     print()
     print("Simulate an authorisation against it with:")
-    print(f"  stripe testhelpers issuing authorizations create \\")
+    print("  stripe testhelpers issuing authorizations create \\")
     print(f"      --card {card.id} --amount 2500")
     return 0
 

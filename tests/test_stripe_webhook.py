@@ -21,10 +21,9 @@ import uuid
 
 import pytest
 from fastapi.testclient import TestClient
+from pydantic import ValidationError
 from sqlalchemy import text
 from sqlalchemy.orm import Session
-
-from pydantic import ValidationError
 
 from app import webhooks
 from app.stripe_client import StripeNotConfigured
@@ -91,7 +90,10 @@ def test_unsigned_request_is_rejected_and_moves_no_money(
 
     assert response.status_code == 400
     assert response.json()["error"] == "SignatureVerificationError"
-    assert session.execute(text("SELECT count(*) FROM card_authorizations")).scalar_one() == 0
+    assert (
+        session.execute(text("SELECT count(*) FROM card_authorizations")).scalar_one()
+        == 0
+    )
 
 
 def test_forged_signature_is_rejected_and_moves_no_money(
@@ -109,7 +111,10 @@ def test_forged_signature_is_rejected_and_moves_no_money(
 
     assert response.status_code == 400
     assert session.execute(text("SELECT count(*) FROM transfers")).scalar_one() == 2
-    assert session.execute(text("SELECT count(*) FROM card_authorizations")).scalar_one() == 0
+    assert (
+        session.execute(text("SELECT count(*) FROM card_authorizations")).scalar_one()
+        == 0
+    )
 
 
 def test_tampered_body_invalidates_a_genuine_signature(
@@ -127,7 +132,10 @@ def test_tampered_body_invalidates_a_genuine_signature(
     response = post(client, tampered, signature)
 
     assert response.status_code == 400
-    assert session.execute(text("SELECT count(*) FROM card_authorizations")).scalar_one() == 0
+    assert (
+        session.execute(text("SELECT count(*) FROM card_authorizations")).scalar_one()
+        == 0
+    )
 
 
 def test_stale_signature_is_rejected(

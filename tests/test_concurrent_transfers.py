@@ -79,7 +79,9 @@ def _transfer_body(
     }
 
 
-def _fund(live_server: str, accounts: dict[str, uuid.UUID], wallet: str, amount: int) -> None:
+def _fund(
+    live_server: str, accounts: dict[str, uuid.UUID], wallet: str, amount: int
+) -> None:
     response = httpx.post(
         f"{live_server}/transfers",
         json=_transfer_body(accounts, "house:float", wallet, amount),
@@ -286,6 +288,8 @@ def test_opposing_transfers_do_not_deadlock(
     assert rows["wallet:bob"] == 20_000
 
     assert (
-        session.execute(text("SELECT SUM(signed_amount) FROM ledger_entries")).scalar_one()
+        session.execute(
+            text("SELECT SUM(signed_amount) FROM ledger_entries")
+        ).scalar_one()
         == 0
     )

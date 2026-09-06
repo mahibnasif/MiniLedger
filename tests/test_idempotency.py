@@ -14,10 +14,9 @@ from sqlalchemy import text
 from sqlalchemy.orm import Session
 
 from app.errors import IdempotencyKeyConflict, InsufficientFunds
-from app.idempotency import canonical_request_hash, claim, complete
+from app.idempotency import canonical_request_hash, claim
 from app.ledger import derive_balance
 from app.transfers import TRANSFERS_ENDPOINT, execute_transfer
-
 
 # --- Hashing -----------------------------------------------------------------
 

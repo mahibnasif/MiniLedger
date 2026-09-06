@@ -23,8 +23,8 @@ from sqlalchemy import engine_from_config, pool
 # root. Alembic does not put the project root on sys.path for us.
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from app.config import get_settings  # noqa: E402
-from app.models import Base  # noqa: E402
+from app.config import get_settings
+from app.models import Base
 
 config = context.config
 

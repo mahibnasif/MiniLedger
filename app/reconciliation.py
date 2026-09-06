@@ -251,9 +251,7 @@ def _check_balance_drift(session: Session, report: ReconciliationReport) -> None
                 for e in not_folded
             ]
 
-        suspects = session.execute(
-            _SUSPECT_ENTRIES, {"account_id": row.account_id}
-        ).all()
+        suspects = session.execute(_SUSPECT_ENTRIES, {"account_id": row.account_id}).all()
         if suspects:
             details.append(
                 "entries belonging to transfers that no longer balance "

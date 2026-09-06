@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import uuid
 
-import pytest
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
@@ -251,6 +250,8 @@ def test_card_spending_leaves_a_reconcilable_ledger(
     assert report.ok, [f.summary for f in report.findings]
 
     assert (
-        session.execute(text("SELECT SUM(signed_amount) FROM ledger_entries")).scalar_one()
+        session.execute(
+            text("SELECT SUM(signed_amount) FROM ledger_entries")
+        ).scalar_one()
         == 0
     )

@@ -2,3 +2,6 @@
 
 pytest>=8.3
 httpx>=0.28
+
+# Lint and format. Config lives in ruff.toml.
+ruff>=0.16

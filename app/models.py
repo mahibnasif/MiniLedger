@@ -258,9 +258,7 @@ class LedgerEntry(Base):
 
     __table_args__ = (
         CheckConstraint("amount > 0", name="amount_positive"),
-        CheckConstraint(
-            f"direction IN {_sql_tuple(DIRECTIONS)}", name="direction_known"
-        ),
+        CheckConstraint(f"direction IN {_sql_tuple(DIRECTIONS)}", name="direction_known"),
         CheckConstraint(f"currency = '{CURRENCY}'", name="currency_supported"),
         # RESTRICT, not CASCADE. Deleting a transfer must never silently delete
         # the postings that prove what happened -- if a transfer needs undoing,
@@ -485,7 +483,9 @@ class CardAuthorization(Base):
 
     card_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True),
-        ForeignKey("cards.id", name="fk_card_authorizations_card_id", ondelete="RESTRICT"),
+        ForeignKey(
+            "cards.id", name="fk_card_authorizations_card_id", ondelete="RESTRICT"
+        ),
         nullable=False,
     )
 
@@ -520,9 +520,7 @@ class CardAuthorization(Base):
 
     __table_args__ = (
         CheckConstraint("amount > 0", name="amount_positive"),
-        CheckConstraint(
-            "decision IN ('approved', 'declined')", name="decision_known"
-        ),
+        CheckConstraint("decision IN ('approved', 'declined')", name="decision_known"),
         # An approval must point at the money it moved; a decline must say why
         # and must NOT point at a transfer. Makes an internally contradictory
         # decision record unrepresentable rather than merely unlikely.

@@ -95,10 +95,7 @@ class AuthorizationRequest:
 
 def _load_card(session: Session, stripe_card_id: str):
     return session.execute(
-        text(
-            "SELECT id, account_id FROM cards "
-            "WHERE stripe_card_id = :stripe_card_id"
-        ),
+        text("SELECT id, account_id FROM cards WHERE stripe_card_id = :stripe_card_id"),
         {"stripe_card_id": stripe_card_id},
     ).one_or_none()
 

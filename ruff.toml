@@ -1,0 +1,25 @@
+# Lint and format config. Kept deliberately small: rules that catch real
+# mistakes, not rules that generate churn.
+
+line-length = 90
+target-version = "py311"
+
+[lint]
+select = [
+    "E",    # pycodestyle errors
+    "F",    # pyflakes: unused imports, undefined names, shadowing
+    "I",    # import sorting
+    "UP",   # pyupgrade: outdated syntax for the target version
+    "B",    # bugbear: mutable defaults, unused loop vars, silent except
+    "SIM",  # simplifiable constructs
+    "C4",   # comprehension misuse
+    "RUF",  # ruff's own checks
+]
+ignore = [
+    "E501",  # line length is enforced by the formatter, not the linter
+]
+
+[lint.per-file-ignores]
+# Alembic writes these; reformatting generated migrations to taste would make
+# every future autogenerate diff noisy for no benefit.
+"migrations/versions/*.py" = ["E", "I", "UP"]

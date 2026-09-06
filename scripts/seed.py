@@ -165,7 +165,7 @@ def print_chart() -> None:
             else r.posted_debits - r.posted_credits
         )
         print(
-            f"{r.name:22} {str(r.id):38} {r.account_type:10} {r.normal_balance:7} "
+            f"{r.name:22} {r.id!s:38} {r.account_type:10} {r.normal_balance:7} "
             f"{r.posted_debits:9} {r.posted_credits:9} {balance:9}"
         )
 

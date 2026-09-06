@@ -16,7 +16,6 @@ from sqlalchemy.orm import Session
 
 from tests.conftest import post_raw_transfer
 
-
 # --- Generated columns -------------------------------------------------------
 
 
@@ -49,7 +48,9 @@ def test_normal_balance_cannot_be_overridden(
     """It is a generated column, so there is no code path that can set it wrong."""
     with pytest.raises(Exception) as excinfo:
         session.execute(
-            text("UPDATE accounts SET normal_balance = 'debit' WHERE name = 'wallet:alice'")
+            text(
+                "UPDATE accounts SET normal_balance = 'debit' WHERE name = 'wallet:alice'"
+            )
         )
     assert "can only be updated to DEFAULT" in str(excinfo.value)
 
@@ -274,9 +275,7 @@ def test_transfers_cannot_be_deleted(
         amount=5000,
     )
     with pytest.raises(IntegrityError) as excinfo:
-        session.execute(
-            text("DELETE FROM transfers WHERE id = :id"), {"id": transfer_id}
-        )
+        session.execute(text("DELETE FROM transfers WHERE id = :id"), {"id": transfer_id})
         session.commit()
     assert "transfers is append-only" in str(excinfo.value)
 
