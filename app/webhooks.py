@@ -48,7 +48,6 @@ from fastapi.responses import JSONResponse
 from sqlalchemy.orm import Session
 
 from app.db import get_session
-from app.errors import LedgerError
 from app.issuing import (
     DECLINE_WEBHOOK_ERROR,
     AuthorizationDecision,
@@ -166,16 +165,23 @@ async def stripe_webhook(
     try:
         decision = decide(session, authorization)
         session.commit()
-    except LedgerError:
-        session.rollback()
-        raise
     except Exception:
         session.rollback()
-        # Never let an unexpected error approve a charge by accident. Stripe
-        # treats a non-response as configurable default behaviour; an explicit
-        # decline is the safe answer when we do not know what happened.
+        # EVERY failure declines. No exception type gets to escape into a 4xx
+        # here, and that uniformity is deliberate.
+        #
+        # Stripe does not treat a non-decision as a decline -- it falls back to
+        # whatever default the account has configured, which may well be
+        # approve-all. So letting an error propagate would hand the decision to
+        # a setting in a dashboard instead of to this code. An explicit decline
+        # fails closed no matter what broke.
+        #
+        # The cost is that a misconfiguration (say, a missing settlement
+        # account) declines quietly and Stripe never retries, so this logs at
+        # exception level with the authorisation id to make it findable.
         logger.exception(
-            "authorization %s failed", authorization.stripe_authorization_id
+            "authorization %s failed; declining",
+            authorization.stripe_authorization_id,
         )
         return AuthorizationDecision(
             approved=False, reason=DECLINE_WEBHOOK_ERROR

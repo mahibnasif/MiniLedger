@@ -62,9 +62,12 @@ def test_retry_replays_the_original_response(
     assert first.headers["Idempotent-Replay"] == "false"
     assert second.headers["Idempotent-Replay"] == "true"
 
-    # Same transfer, same values. Key ORDER may differ because the stored body
-    # round-trips through jsonb, so compare parsed dicts rather than raw text.
+    # Same transfer, same values -- and the same BYTES. The stored body
+    # round-trips through jsonb, which normalises key order, so returning it
+    # raw would reorder the keys on a replay. Both responses go through this
+    # route's response_model, which puts them through one serialiser.
     assert first.json() == second.json()
+    assert first.content == second.content
 
 
 def test_retry_does_not_move_money_twice(

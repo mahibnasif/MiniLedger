@@ -54,8 +54,3 @@ class AccountResponse(BaseModel):
     posted_debits: int
     posted_credits: int
     entry_count: int
-
-
-class ErrorResponse(BaseModel):
-    error: str
-    detail: str

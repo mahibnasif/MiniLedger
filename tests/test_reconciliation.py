@@ -215,28 +215,78 @@ def test_missing_balance_row_is_caught(
     assert "balance_drift" in checks
 
 
-def test_negative_balance_on_a_restricted_account_is_caught(
+def test_negative_balance_is_caught_even_with_a_correct_cache(
     session: Session, funded: dict[str, uuid.UUID]
 ) -> None:
-    """The log says a wallet is overdrawn, which no code path should allow."""
-    transfer_id = session.execute(
-        text(
-            "INSERT INTO transfers (source_account_id, destination_account_id, amount) "
-            "VALUES (:src, :dst, 999999) RETURNING id"
-        ),
-        {"src": funded["wallet:alice"], "dst": funded["wallet:bob"]},
-    ).scalar_one()
+    """The regression that matters.
+
+    This check used to sit after the drift early-return, so it could only fire
+    on an account that was ALREADY failing another check. An account overdrawn
+    by a bug in the posting path updates the cache correctly and produces no
+    drift at all -- and was therefore completely invisible.
+
+    So the cache is deliberately kept CORRECT here. The only thing wrong is
+    that a wallet which may not go negative is negative.
+    """
     session.execute(
         text(
-            "INSERT INTO ledger_entries (transfer_id, account_id, direction, amount) "
-            "VALUES (:t, :src, 'debit', 999999), (:t, :dst, 'credit', 999999)"
+            """
+            WITH t AS (
+                INSERT INTO transfers
+                    (source_account_id, destination_account_id, amount)
+                VALUES (:alice, :bob, 100000)
+                RETURNING id
+            ),
+            e AS (
+                INSERT INTO ledger_entries (transfer_id, account_id, direction, amount)
+                SELECT t.id, :alice, 'debit', 100000 FROM t
+                UNION ALL
+                SELECT t.id, :bob, 'credit', 100000 FROM t
+                RETURNING id, account_id, direction, amount
+            ),
+            d AS (
+                SELECT account_id,
+                       COALESCE(SUM(amount) FILTER (WHERE direction='debit'), 0)  AS dd,
+                       COALESCE(SUM(amount) FILTER (WHERE direction='credit'), 0) AS cc,
+                       COUNT(*) AS n, MAX(id) AS li
+                FROM e GROUP BY account_id
+            )
+            INSERT INTO account_balances AS b
+                (account_id, posted_debits, posted_credits, entry_count,
+                 last_entry_id, updated_at)
+            SELECT account_id, dd, cc, n, li, now() FROM d
+            ON CONFLICT (account_id) DO UPDATE SET
+                posted_debits  = b.posted_debits  + EXCLUDED.posted_debits,
+                posted_credits = b.posted_credits + EXCLUDED.posted_credits,
+                entry_count    = b.entry_count    + EXCLUDED.entry_count,
+                last_entry_id  = GREATEST(COALESCE(b.last_entry_id, 0),
+                                          EXCLUDED.last_entry_id),
+                updated_at     = now()
+            """
         ),
-        {"t": transfer_id, "src": funded["wallet:alice"], "dst": funded["wallet:bob"]},
+        {"alice": funded["wallet:alice"], "bob": funded["wallet:bob"]},
     )
     session.commit()
 
-    checks = _checks(session)
+    findings = reconcile(session).findings
+    checks = [f.check for f in findings]
+
     assert "negative_balance" in checks
+    # The cache agrees with the log, so drift must NOT be what caught it.
+    assert "balance_drift" not in checks
+
+    negative = next(f for f in findings if f.check == "negative_balance")
+    assert negative.subject == "wallet:alice"
+    assert "-500.00 USD" in negative.summary
+
+
+def test_accounts_allowed_to_go_negative_are_not_flagged(
+    session: Session, funded: dict[str, uuid.UUID]
+) -> None:
+    """house:float is already negative by design -- funding the wallets drove
+    it there. Flagging it would make the report noise."""
+    report = reconcile(session)
+    assert report.ok, [f.summary for f in report.findings]
 
 
 # --- Scenario 3: a perfectly consistent ledger that is still wrong -----------

@@ -106,8 +106,8 @@ class Account(Base):
     normal_balance: Mapped[str] = mapped_column(
         Text,
         Computed(
-            "CASE WHEN account_type IN ('asset', 'expense') "
-            "THEN 'debit'::text ELSE 'credit'::text END",
+            f"CASE WHEN account_type IN {_sql_tuple(DEBIT_NORMAL_TYPES)} "
+            f"THEN 'debit'::text ELSE 'credit'::text END",
             persisted=True,
         ),
         nullable=False,
@@ -391,8 +391,10 @@ class IdempotencyKey(Base):
     # transfer row would look equivalent but drifts the moment the response
     # shape changes; a replay is supposed to be what the caller saw the first
     # time. jsonb rather than text so an operator can query these directly
-    # while debugging; the cost is that key order is normalised, so a replay is
-    # semantically identical rather than byte-identical.
+    # while debugging. jsonb normalises key order, so this is not returned raw:
+    # the route serialises it through the same response_model as the original
+    # response, which makes the replay byte-identical rather than merely
+    # equivalent.
     response_status: Mapped[int | None] = mapped_column(SmallInteger, nullable=True)
     response_body: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
 

@@ -225,6 +225,15 @@ quietly stops testing anything.
 
 Verified deterministic over repeated runs, not a single lucky pass.
 
+## Response fidelity
+
+A replay is **byte-identical** to the original response. `response_body` is
+stored as `jsonb` so an operator can query it in SQL while debugging a duplicate
+charge, but jsonb normalises key order — returning it raw would hand back the
+same values in a different sequence. Both the original and the replay are
+serialised through the route's `response_model`, so they go through one
+serialiser and the bytes match. Asserted in `test_api.py`.
+
 ## Not built
 
 - **Key retention/expiry.** Keys accumulate forever. Production would age them

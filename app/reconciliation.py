@@ -186,11 +186,40 @@ def _check_balance_drift(session: Session, report: ReconciliationReport) -> None
                 )
             )
 
+        derived_balance = balance_of(row.normal_balance, derived)
+        reported_balance = balance_of(row.normal_balance, reported)
+
+        # Checked for EVERY account, before the drift early-return below.
+        #
+        # This started life inside the drift block, which meant it could only
+        # ever fire on an account that was already failing another check. An
+        # account overdrawn by a bug in the posting path -- which updates the
+        # cache correctly, so there is no drift -- was invisible. That is
+        # exactly the case worth catching: drift means the cache is lying,
+        # whereas this means the LEDGER ITSELF records money that should never
+        # have been allowed to leave.
+        if derived_balance < 0 and not row.allow_negative_balance:
+            report.findings.append(
+                Finding(
+                    check="negative_balance",
+                    subject=row.name,
+                    summary=(
+                        f"account is not permitted to go negative but the ledger "
+                        f"puts it at {format_minor_units(derived_balance)}"
+                    ),
+                    details=(
+                        f"derived from {derived.entry_count} entries: "
+                        f"{derived.posted_debits} debited, "
+                        f"{derived.posted_credits} credited",
+                        "no code path should be able to produce this -- treat it "
+                        "as a bug in the overdraft check, not as bad data",
+                    ),
+                )
+            )
+
         if derived == reported:
             continue
 
-        derived_balance = balance_of(row.normal_balance, derived)
-        reported_balance = balance_of(row.normal_balance, reported)
         delta = reported_balance - derived_balance
 
         direction = "MORE" if delta > 0 else "LESS"
@@ -254,20 +283,6 @@ def _check_balance_drift(session: Session, report: ReconciliationReport) -> None
                 details=tuple(details),
             )
         )
-
-        # A restricted account that the LOG says is negative is a separate
-        # problem from the cache being wrong, so it gets its own finding.
-        if derived_balance < 0 and not row.allow_negative_balance:
-            report.findings.append(
-                Finding(
-                    check="negative_balance",
-                    subject=row.name,
-                    summary=(
-                        f"account is not permitted to go negative but the ledger "
-                        f"puts it at {format_minor_units(derived_balance)}"
-                    ),
-                )
-            )
 
 
 # --- Check 2: is the log internally consistent? ------------------------------

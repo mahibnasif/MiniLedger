@@ -335,3 +335,25 @@ def test_unhandled_event_types_are_acknowledged_not_errored(
         "handled": False,
         "type": "issuing_card.created",
     }
+
+
+def test_any_internal_failure_declines_rather_than_erroring(
+    client: TestClient, configured: None, card: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Fail closed.
+
+    Stripe does not read a non-decision as a decline -- it falls back to the
+    account's configured default, which may be approve-all. So an error here
+    must not propagate into a 4xx/5xx; it has to answer the question explicitly.
+    """
+
+    def exploding(*_args, **_kwargs):
+        raise RuntimeError("settlement account vanished")
+
+    monkeypatch.setattr(webhooks, "decide", exploding)
+
+    payload = authorization_event(amount=2_500)
+    response = post(client, payload, sign(payload))
+
+    assert response.status_code == 200
+    assert response.json() == {"approve": False, "decline_reason": "webhook_error"}

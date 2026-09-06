@@ -29,13 +29,13 @@ from app.errors import (
     LedgerError,
 )
 from app.ledger import AccountSnapshot, cached_all_snapshots, cached_snapshot
-from app.schemas import AccountResponse, TransferRequest
+from app.schemas import AccountResponse, TransferRequest, TransferResponse
 from app.transfers import execute_transfer
 from app.webhooks import router as webhooks_router
 
 app = FastAPI(
     title="MiniLedger",
-    version="0.2.0",
+    version="1.0.0",
     description=(
         "A double-entry ledger with idempotent money movement. "
         "Balances are derived from an append-only entry log."
@@ -91,7 +91,7 @@ def list_accounts(session: Annotated[Session, Depends(get_session)]):
     return [_account_response(s) for s in cached_all_snapshots(session)]
 
 
-@app.post("/transfers", status_code=201)
+@app.post("/transfers", status_code=201, response_model=TransferResponse)
 def create_transfer(
     payload: TransferRequest,
     response: Response,
@@ -118,13 +118,14 @@ def create_transfer(
     header rather than by changing what the caller is handed: the body carries
     the same transfer id and the same values as the first response.
 
-    Not byte-identical, though, and it is worth knowing why. The stored body
-    round-trips through a jsonb column, which normalises key order, so a replay
-    can serialise its keys in a different sequence. That is invisible to any
-    JSON parser and buys a response body that is queryable in SQL, which is the
-    right trade for an operator debugging a duplicate charge at 3am. A system
-    that needed byte-exact replay -- one signing response bodies, say -- would
-    store the raw text instead and give up the queryability.
+    The replay is byte-identical, and that is worth one sentence because it is
+    not free. The stored body round-trips through a jsonb column, which
+    normalises key order, so returning it raw would hand back the same values in
+    a different sequence. Serialising both the original and the replay through
+    this route's response_model puts them through one serialiser, so the bytes
+    match -- and the OpenAPI schema documents the shape as a side effect.
+    jsonb is still the right storage type: an operator debugging a duplicate
+    charge at 3am can query these bodies in SQL, which raw text would not allow.
     """
     try:
         body, was_replay = execute_transfer(
