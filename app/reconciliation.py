@@ -71,6 +71,7 @@ class ReconciliationReport:
     accounts_checked: int = 0
     transfers_checked: int = 0
     entries_checked: int = 0
+    card_authorizations_checked: int = 0
     findings: list[Finding] = field(default_factory=list)
 
     @property
@@ -83,6 +84,7 @@ class ReconciliationReport:
             "accounts_checked": self.accounts_checked,
             "transfers_checked": self.transfers_checked,
             "entries_checked": self.entries_checked,
+            "card_authorizations_checked": self.card_authorizations_checked,
             "findings": [f.as_dict() for f in self.findings],
         }
 
@@ -443,6 +445,72 @@ def _check_transfer_provenance(session: Session, report: ReconciliationReport) -
         )
 
 
+# --- Check 4: does each card decision match the money it claims to have moved?
+
+# The foreign key guarantees an approved authorisation POINTS AT a transfer. It
+# says nothing about whether that transfer is the right one. Two ways a card
+# programme gets this wrong, both silent without this check:
+#
+#   * the amount posted differs from the amount authorised -- the customer is
+#     charged something other than what the terminal showed them;
+#   * the debit came out of a different account than the card belongs to --
+#     the wrong customer paid, and every balance still reconciles perfectly
+#     because the ledger itself is internally consistent.
+#
+# The second one is the reason this exists. Nothing else in this file would
+# notice it.
+_CARD_AUTHORIZATION_MISMATCH = text(
+    """
+    SELECT ca.stripe_authorization_id,
+           ca.amount                AS authorised_amount,
+           t.amount                 AS transfer_amount,
+           card_account.name        AS card_account_name,
+           source_account.name      AS debited_account_name,
+           (ca.amount <> t.amount)                      AS amount_differs,
+           (t.source_account_id <> c.account_id)        AS wrong_account
+    FROM card_authorizations ca
+    JOIN cards c            ON c.id = ca.card_id
+    JOIN transfers t        ON t.id = ca.transfer_id
+    JOIN accounts card_account   ON card_account.id = c.account_id
+    JOIN accounts source_account ON source_account.id = t.source_account_id
+    WHERE ca.decision = 'approved'
+      AND (ca.amount <> t.amount OR t.source_account_id <> c.account_id)
+    ORDER BY ca.created_at
+    """
+)
+
+
+def _check_card_authorizations(session: Session, report: ReconciliationReport) -> None:
+    report.card_authorizations_checked = session.execute(
+        text("SELECT count(*) FROM card_authorizations")
+    ).scalar_one()
+
+    for row in session.execute(_CARD_AUTHORIZATION_MISMATCH).all():
+        problems = []
+        if row.amount_differs:
+            problems.append(
+                f"authorised {format_minor_units(row.authorised_amount)} but the "
+                f"transfer moved {format_minor_units(row.transfer_amount)}"
+            )
+        if row.wrong_account:
+            problems.append(
+                f"card belongs to {row.card_account_name} but "
+                f"{row.debited_account_name} was debited"
+            )
+
+        report.findings.append(
+            Finding(
+                check="card_authorization_mismatch",
+                subject=row.stripe_authorization_id,
+                summary="; ".join(problems),
+                details=(
+                    "the ledger is internally consistent here -- no balance "
+                    "check would catch this",
+                ),
+            )
+        )
+
+
 def reconcile(session: Session) -> ReconciliationReport:
     """Run every check and return what was found. Never raises on bad data."""
     report = ReconciliationReport()
@@ -450,4 +518,5 @@ def reconcile(session: Session) -> ReconciliationReport:
     _check_balance_drift(session, report)
     _check_transfer_integrity(session, report)
     _check_transfer_provenance(session, report)
+    _check_card_authorizations(session, report)
     return report

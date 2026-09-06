@@ -16,6 +16,7 @@ from sqlalchemy import text
 from sqlalchemy.orm import Session
 
 from app.reconciliation import reconcile
+from tests.conftest import post_raw_transfer
 
 
 def _checks(session: Session) -> list[str]:
@@ -360,3 +361,127 @@ def test_bypassed_idempotency_leaves_no_drift_but_is_still_caught(
     # Only the provenance gap gives it away.
     assert checks == ["transfer_without_idempotency_key"]
     assert findings[0].subject == str(duplicate_id)
+
+
+# --- Scenario 4: the card decision does not match the money it moved ---------
+
+
+def _approve_card_authorization(
+    session: Session,
+    accounts: dict[str, uuid.UUID],
+    *,
+    authorised_amount: int,
+    posted_amount: int,
+    debited_account: str,
+) -> None:
+    """Record an approved authorisation whose transfer may disagree with it.
+
+    The transfer is posted WITH its cache update, so the ledger is left
+    internally perfect. That matters: these tests assert that no balance-based
+    check fires, which is only meaningful if there is genuinely no drift to
+    find.
+
+    Written by hand rather than through app.issuing, because the point is to
+    produce a row the real code path would never produce -- which is exactly
+    what reconciliation exists to notice.
+    """
+    card_id = session.execute(
+        text(
+            "INSERT INTO cards (stripe_card_id, stripe_cardholder_id, account_id) "
+            "VALUES ('ic_x', 'ich_x', :a) RETURNING id"
+        ),
+        {"a": accounts["wallet:alice"]},
+    ).scalar_one()
+    session.commit()
+
+    transfer_id = post_raw_transfer(
+        session,
+        debit_account_id=accounts[debited_account],
+        credit_account_id=accounts["house:float"],
+        amount=posted_amount,
+        maintain_cache=True,
+    )
+
+    session.execute(
+        text(
+            """
+            INSERT INTO card_authorizations
+                (stripe_authorization_id, card_id, amount, decision,
+                 transfer_id, balance_at_decision)
+            VALUES ('iauth_x', :card, :amount, 'approved', :transfer, 50000)
+            """
+        ),
+        {"card": card_id, "amount": authorised_amount, "transfer": transfer_id},
+    )
+    session.commit()
+
+
+def test_authorisation_posted_for_the_wrong_amount_is_caught(
+    session: Session, funded: dict[str, uuid.UUID]
+) -> None:
+    """The customer was charged something other than what the terminal showed."""
+    _approve_card_authorization(
+        session,
+        funded,
+        authorised_amount=2_500,
+        posted_amount=9_900,
+        debited_account="wallet:alice",
+    )
+
+    findings = reconcile(session).findings
+    mismatch = next(f for f in findings if f.check == "card_authorization_mismatch")
+
+    assert mismatch.subject == "iauth_x"
+    assert "authorised 25.00 USD" in mismatch.summary
+    assert "moved 99.00 USD" in mismatch.summary
+
+
+def test_authorisation_that_debited_the_wrong_customer_is_caught(
+    session: Session, funded: dict[str, uuid.UUID]
+) -> None:
+    """The one nothing else would notice.
+
+    The card belongs to Alice but Bob's wallet was debited. Every entry
+    balances, the cache matches the log, the global sum is zero -- the ledger
+    is internally flawless and the wrong person paid.
+    """
+    _approve_card_authorization(
+        session,
+        funded,
+        authorised_amount=2_500,
+        posted_amount=2_500,
+        debited_account="wallet:bob",
+    )
+
+    findings = reconcile(session).findings
+    checks = [f.check for f in findings]
+
+    assert "balance_drift" not in checks
+    assert "unbalanced_transfer" not in checks
+    assert "ledger_does_not_balance" not in checks
+
+    mismatch = next(f for f in findings if f.check == "card_authorization_mismatch")
+    assert "card belongs to wallet:alice" in mismatch.summary
+    assert "wallet:bob was debited" in mismatch.summary
+
+
+def test_a_correct_card_authorisation_produces_no_finding(
+    session: Session, settlement: dict[str, uuid.UUID], card: str
+) -> None:
+    """The check must stay quiet on the real code path."""
+    from app.issuing import AuthorizationRequest, decide
+
+    decide(
+        session,
+        AuthorizationRequest(
+            stripe_authorization_id="iauth_ok",
+            stripe_card_id=card,
+            amount=2_500,
+            merchant_name="Test Coffee",
+        ),
+    )
+    session.commit()
+
+    report = reconcile(session)
+    assert report.ok, [f.summary for f in report.findings]
+    assert report.card_authorizations_checked == 1

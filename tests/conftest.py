@@ -87,6 +87,32 @@ def accounts(session: Session) -> dict[str, uuid.UUID]:
     return {r.name: r.id for r in rows}
 
 
+# Folds a set of just-written entries into account_balances exactly the way
+# app/transfers.py does. Duplicated deliberately rather than imported: a test
+# that reuses the production statement cannot tell you whether the production
+# statement is right.
+_FOLD_INTO_CACHE = """
+    , deltas AS (
+        SELECT account_id,
+               COALESCE(SUM(amount) FILTER (WHERE direction = 'debit'), 0)  AS posted_debits,
+               COALESCE(SUM(amount) FILTER (WHERE direction = 'credit'), 0) AS posted_credits,
+               COUNT(*) AS entry_count,
+               MAX(id)  AS last_entry_id
+        FROM new_entries GROUP BY account_id
+    )
+    INSERT INTO account_balances AS b
+        (account_id, posted_debits, posted_credits, entry_count, last_entry_id, updated_at)
+    SELECT account_id, posted_debits, posted_credits, entry_count, last_entry_id, now()
+    FROM deltas
+    ON CONFLICT (account_id) DO UPDATE SET
+        posted_debits  = b.posted_debits  + EXCLUDED.posted_debits,
+        posted_credits = b.posted_credits + EXCLUDED.posted_credits,
+        entry_count    = b.entry_count    + EXCLUDED.entry_count,
+        last_entry_id  = GREATEST(COALESCE(b.last_entry_id, 0), EXCLUDED.last_entry_id),
+        updated_at     = now()
+"""
+
+
 def post_raw_transfer(
     session: Session,
     *,
@@ -94,6 +120,7 @@ def post_raw_transfer(
     credit_account_id: uuid.UUID,
     amount: int,
     description: str | None = None,
+    maintain_cache: bool = False,
 ) -> uuid.UUID:
     """Write a balanced transfer with raw SQL, bypassing the application.
 
@@ -119,14 +146,25 @@ def post_raw_transfer(
         },
     ).scalar_one()
 
-    session.execute(
-        text(
-            """
+    entries = """
+        WITH new_entries AS (
             INSERT INTO ledger_entries (transfer_id, account_id, direction, amount)
             VALUES (:tid, :debit_account,  'debit',  :amount),
                    (:tid, :credit_account, 'credit', :amount)
-            """
-        ),
+            RETURNING id, account_id, direction, amount
+        )
+    """
+    # Without the fold, the cache falls behind and reconciliation reports
+    # drift -- which is what most of these tests want. Pass maintain_cache=True
+    # when the test needs a ledger that is internally perfect, so that whatever
+    # it IS testing is the only thing wrong.
+    if maintain_cache:
+        entries += _FOLD_INTO_CACHE
+    else:
+        entries += " SELECT 1 FROM new_entries"
+
+    session.execute(
+        text(entries),
         {
             "tid": transfer_id,
             "debit_account": debit_account_id,
