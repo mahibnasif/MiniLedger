@@ -58,9 +58,19 @@ Two families, because balance comparison alone is not enough.
 | `incomplete_transfer` | A transfer with fewer than two entries |
 | `transfer_amount_mismatch` | Declared amount ≠ its debit entries |
 | `transfer_without_idempotency_key` | Transfer written outside the idempotent path |
+| `card_authorization_mismatch` | Approved authorisation disagrees with the transfer it created |
 
 A drift number alone tells you an account is off by 5000. The log-integrity
 checks are what let the report say **which entries did it**.
+
+Two of these catch things no balance comparison ever could.
+`transfer_without_idempotency_key` catches a duplicate payment (below).
+`card_authorization_mismatch` catches an approved card authorisation whose
+transfer disagrees with it — either the amount posted differs from the amount
+authorised, or **the debit came out of an account the card does not belong
+to**. In that second case every entry balances, the cache matches the log, and
+the global signed sum is zero. The ledger is internally flawless and the wrong
+customer paid.
 
 ### How independent is it, really?
 
@@ -200,6 +210,9 @@ Two tests assert the findings list *exactly*:
 
 - cache drift → `["balance_drift"]` and nothing else
 - bypassed idempotency → `["transfer_without_idempotency_key"]` and nothing else
+- a card authorisation that debited the wrong customer → every balance-based
+  check stays silent, so the test fails if `card_authorization_mismatch` ever
+  stops being the only thing that catches it
 
 Corruption is simulated the way a real actor would have to do it — disabling the
 append-only triggers first — rather than by reaching past the schema in a way

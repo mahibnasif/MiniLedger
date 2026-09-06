@@ -407,8 +407,18 @@ wallet:alice              47500        # charged once, not twice
 ## Testing
 
 ```bash
-.venv/Scripts/python -m pytest
+.venv/Scripts/python -m pytest        # the suite
+.venv/Scripts/ruff check .            # lint
+.venv/Scripts/ruff format --check .   # formatting
 ```
+
+CI runs all three plus the migrations, the seed, and the reconciliation job on a
+clean Ubuntu machine with a fresh PostgreSQL 15, on **Python 3.11 and 3.13** —
+the repo is developed on 3.13, so the matrix is what makes the "3.11+" claim
+true rather than hopeful. It also asserts the *inverse* of the reconciliation
+job: each of the three corruption scenarios must make it exit non-zero. A
+reconciler that cannot fail is worthless, and only checking the happy path would
+never notice.
 
 Everything runs against **real PostgreSQL**, never SQLite and never mocks.
 Nearly everything this project claims — deferred constraint triggers, generated
@@ -423,7 +433,7 @@ invariant; it is a convention waiting for the first script somebody writes at
 The session fixture round-trips `downgrade base` → `upgrade head`, so the
 downgrade path stays honest rather than being a function nobody runs.
 
-**Three bugs the tests found**, all documented in the commit history:
+**Four bugs the tests found**, all documented in the commit history:
 
 - Ten concurrent authorisations overdrawing a wallet to −5000 (the snapshot bug).
 - Money silently becoming `Decimal` instead of `int`, hidden for two phases
@@ -432,6 +442,16 @@ downgrade path stays honest rather than being a function nobody runs.
 - The reconciliation job **hanging forever** on an unreachable database. For a
   scheduled auditor that is the worst failure: it never finishes, never exits
   non-zero, never alerts. Silence looks exactly like success.
+- `negative_balance` sitting after the drift early-return, so it could only fire
+  on an account already failing another check. An account overdrawn by a bug in
+  the posting path updates the cache correctly, produces no drift, and was
+  therefore invisible — which is precisely the case it existed to catch. Its
+  test had been passing for the wrong reason.
+
+Two tests deserve suspicion rather than trust, and both were found to be
+passing for the wrong reason and rewritten: the one above, and a
+"503 when unconfigured" test that only passed because `.env` happened to be
+empty at the time.
 
 ---
 
@@ -529,6 +549,8 @@ scheduled — wiring it to a specific scheduler is deployment, not ledger design
 ## Repo layout
 
 ```
+.github/workflows/   CI: suite + lint + migrations + reconciliation, on 3.11 and 3.13
+ruff.toml            lint and format config
 app/
   models.py          schema: tables, constraints, generated columns
   ledger.py          balance derivation; the debit/credit sign rule
